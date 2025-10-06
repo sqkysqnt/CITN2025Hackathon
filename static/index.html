@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Community Resources & Census Insights</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    #map { height: 420px; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4">
+      <div class="text-xl font-bold">Community Resources</div>
+      <div class="ml-auto text-sm text-slate-500">Powered by CIN Hackathon API</div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6 grid gap-6 md:grid-cols-3">
+    <!-- Left: Filters & Search -->
+    <section class="md:col-span-1">
+      <div class="bg-white rounded-2xl shadow p-4 space-y-4">
+        <h2 class="font-semibold text-lg">Find Help</h2>
+        <label class="block text-sm">Search</label>
+        <input id="q" type="text" placeholder="food, housing, counseling…" class="w-full border rounded-xl px-3 py-2" />
+
+        <label class="block text-sm mt-3">Resource Type</label>
+        <select id="type" class="w-full border rounded-xl px-3 py-2"></select>
+
+        <button id="searchBtn" class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-3 py-2">Search</button>
+
+        <p class="text-xs text-slate-500">Tip: choose a type to filter, or leave it to see everything.</p>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow p-4 mt-6">
+        <h3 class="font-semibold">Census Insights</h3>
+        <p class="text-sm text-slate-600">Quick look at poverty/assistance to tailor outreach.</p>
+        <div id="census" class="mt-3 space-y-2 text-sm"></div>
+      </div>
+    </section>
+
+    <!-- Right: Map + Results -->
+    <section class="md:col-span-2 space-y-4">
+      <div class="bg-white rounded-2xl shadow">
+        <div id="map" class="rounded-2xl"></div>
+      </div>
+      <div id="results" class="grid gap-4"></div>
+    </section>
+  </main>
+
+  <footer class="max-w-6xl mx-auto px-4 pb-10 text-xs text-slate-500">
+    Data source: <a class="underline" href="{{ base_url }}" target="_blank" rel="noreferrer">{{ base_url }}</a>
+  </footer>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Request failed ${r.status}`);
+  return await r.json();
+}
+
+function safeText(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+function resourceCard(rec) {
+  const s = rec; // summarized by backend (includes lat/lon)
+  const extras = s.extras || {};
+  const extrasHtml = Object.entries(extras).map(([k,v]) => `<div class="flex justify-between"><span class="text-slate-500">${k}</span><span>${safeText(v)}</span></div>`).join("");
+  return `
+    <article class="bg-white rounded-2xl shadow p-4">
+      <div class="flex items-start justify-between gap-4">
+        <h3 class="font-semibold text-lg">${safeText(s.title)}</h3>
+        ${s.website ? `<a class="text-blue-600 underline" href="${s.website}" target="_blank" rel="noreferrer">Website</a>` : ''}
+      </div>
+      ${s.description ? `<p class="mt-1 text-slate-700">${safeText(s.description)}</p>` : ''}
+      <div class="mt-2 text-sm space-y-1">
+        ${s.phone ? `<div>📞 ${safeText(s.phone)}</div>`:''}
+        ${s.email ? `<div>✉️ <a class="underline" href="mailto:${s.email}">${safeText(s.email)}</a></div>`:''}
+        ${s.address ? `<div>📍 ${safeText(s.address)}</div>`:''}
+      </div>
+      ${extrasHtml ? `<div class="mt-3 text-sm border-t pt-2 space-y-1">${extrasHtml}</div>` : ''}
+    </article>`;
+}
+
+let map, markersLayer;
+function ensureMap(){
+  if (map) return map;
+  map = L.map('map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+  map.setView([39.5, -98.35], 4); // sensible US default; will fit to markers
+  markersLayer = L.layerGroup().addTo(map);
+  return map;
+}
+
+function setMarkers(items){
+  ensureMap();
+  markersLayer.clearLayers();
+  const bounds = [];
+  items.forEach(s => {
+    if (typeof s.latitude === 'number' && typeof s.longitude === 'number') {
+      const m = L.marker([s.latitude, s.longitude]).bindPopup(`<b>${safeText(s.title)}</b><br/>${safeText(s.address)}${s.website?`<br/><a href='${s.website}' target='_blank' rel='noopener'>website</a>`:''}`);
+      markersLayer.addLayer(m);
+      bounds.push([s.latitude, s.longitude]);
+    }
+  });
+  if (bounds.length){ map.fitBounds(bounds, { padding: [20,20] }); }
+}
+
+async function populateTypes() {
+  try {
+    const types = await fetchJSON('/api/ResourceType');
+    const sel = document.getElementById('type');
+    sel.innerHTML = '<option value="">All types</option>' + (types || []).map(t => `<option value="${t.id ?? t.Id ?? t.resourceTypeId ?? ''}">${safeText(t.name ?? t.Name ?? t.title ?? 'Type')}</option>`).join('');
+  } catch(e) {
+    console.error(e);
+    document.getElementById('type').innerHTML = '<option>Types unavailable</option>'
+  }
+}
+
+async function loadResources() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const typeId = document.getElementById('type').value;
+  const res = await fetchJSON('/api/Resource');
+  let items = Array.isArray(res) ? res : [];
+  // client-side filter (schema-agnostic)
+  if (typeId) {
+    items = items.filter(r => {
+      const v = r.resourceTypeId ?? r.typeId ?? r.ResourceTypeId;
+      return String(v || '') === String(typeId);
+    });
+  }
+  if (q) {
+    items = items.filter(r => JSON.stringify(r).toLowerCase().includes(q));
+  }
+
+  // summarize each for safe display (includes lat/lon for the map)
+  const summarized = await (await fetch('/summarize', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items})})).json();
+  const html = summarized.map(resourceCard).join('');
+  document.getElementById('results').innerHTML = html || '<div class="text-slate-500">No results</div>';
+
+  // map markers
+  setMarkers(summarized);
+}
+
+async function loadCensus() {
+  const box = document.getElementById('census');
+  try {
+    const [poverty, food] = await Promise.all([
+      fetchJSON('/api/CensusPovertyData'),
+      fetchJSON('/api/CensusFoodAssistanceData')
+    ]);
+    function pickNum(obj) {
+      if (!obj) return null;
+      for (const [k,v] of Object.entries(obj)) {
+        if (typeof v === 'number') return v;
+        if (typeof v === 'string' && v.match(/^[0-9.,%]+$/)) return v;
+      }
+      return null;
+    }
+    const p = Array.isArray(poverty) ? pickNum(poverty[0]) : pickNum(poverty);
+    const f = Array.isArray(food) ? pickNum(food[0]) : pickNum(food);
+    box.innerHTML = `
+      <div class="flex items-center justify-between"><span class="text-slate-500">Poverty (sample)</span><span class="font-semibold">${p ?? '—'}</span></div>
+      <div class="flex items-center justify-between"><span class="text-slate-500">Food Assistance (sample)</span><span class="font-semibold">${f ?? '—'}</span></div>
+      <a class="text-blue-600 underline text-xs" href="${encodeURI('/explore')}">Explore detailed breakdowns →</a>
+    `;
+  } catch (e) {
+    box.innerHTML = '<div class="text-slate-500">Census data unavailable.</div>'
+  }
+}
+
+// Events
+window.addEventListener('DOMContentLoaded', async () => {
+  ensureMap();
+  await populateTypes();
+  await Promise.all([loadResources(), loadCensus()]);
+  document.getElementById('searchBtn').addEventListener('click', loadResources);
+});
+</script>
+</body>
+</html>
