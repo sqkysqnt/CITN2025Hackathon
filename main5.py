@@ -1,5 +1,5 @@
 """
-CIN Hackathon Resource Connector — Flask (single-file app)
+CITN Hackathon Resource Connector — Flask (single-file app)
 
 Serves a static index.html and proxies the Hackathon API with simple caching.
 Also exposes /config so the static JS can read runtime values (e.g., base_url).
